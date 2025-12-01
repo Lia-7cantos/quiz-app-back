@@ -47,7 +47,7 @@ class QuizAttemptController extends Controller
 
             // verificar se a resposta está correta
             $isCorrect = $selectedOption->is_correct;
-            $points = 10; 
+            $points = 10;
 
             // criar registro da resposta
             $userAnswer = UserAnswer::create([
@@ -70,7 +70,7 @@ class QuizAttemptController extends Controller
             return response()->json([
                 'message' => 'Resposta registrada com sucesso!',
                 'is_correct' => $isCorrect,
-                'correct_answer_id' => $isCorrect ? null : $question->correctOption->id, // Só revela resposta correta se errou
+                'correct_answer_id' => $isCorrect ? null : $question->correctOption->id,
                 'current_score' => $quizAttempt->score,
                 'correct_answers' => $quizAttempt->correct_answers,
                 'wrong_answers' => $quizAttempt->wrong_answers
@@ -95,7 +95,7 @@ class QuizAttemptController extends Controller
         try {
             $quizAttempt = QuizAttempt::find($request->quiz_attempt_id);
 
-            // vrificar se todas as questões foram respondidas
+            // verificar se todas as questões foram respondidas
             $answeredQuestions = UserAnswer::where('quiz_attempt_id', $quizAttempt->id)->count();
             $totalQuestions = 10;
 
@@ -107,7 +107,7 @@ class QuizAttemptController extends Controller
                 ], 422);
             }
 
-            // fnalizar a tentativa
+            // finalizar a tentativa
             $quizAttempt->update([
                 'completed_at' => now(),
                 'time_spent' => $request->time_spent ?? 0
@@ -116,11 +116,15 @@ class QuizAttemptController extends Controller
             DB::commit();
 
             return response()->json([
+                'success' => true,
                 'message' => 'Quiz finalizado com sucesso!',
+                'attempt_id' => $quizAttempt->id,
                 'final_score' => $quizAttempt->score,
+                'score' => $quizAttempt->score,
                 'correct_answers' => $quizAttempt->correct_answers,
                 'wrong_answers' => $quizAttempt->wrong_answers,
                 'time_spent' => $quizAttempt->time_spent,
+                'total_questions' => $totalQuestions,
                 'accuracy' => round(($quizAttempt->correct_answers / $totalQuestions) * 100, 2)
             ]);
         } catch (\Exception $e) {
@@ -134,39 +138,66 @@ class QuizAttemptController extends Controller
     }
 
     /**
-     * bscar resultados de uma tentativa específica
+     * buscar resultados de uma tentativa específica
      */
     public function results($attemptId): JsonResponse
     {
         try {
-            $quizAttempt = QuizAttempt::with(['userAnswers.question', 'userAnswers.option'])
-                ->where('id', $attemptId)
+            // buscar tentativa do usuário atual
+            $quizAttempt = QuizAttempt::where('id', $attemptId)
                 ->where('user_id', Auth::id())
-                ->firstOrFail();
+                ->first();
 
-            // verificar se o quiz foi finalizado
-            if (!$quizAttempt->completed_at) {
+            if (!$quizAttempt) {
                 return response()->json([
-                    'message' => 'Este quiz ainda não foi finalizado.'
-                ], 422);
+                    'success' => false,
+                    'message' => 'Tentativa não encontrada ou você não tem permissão para visualizá-la.',
+                    'debug' => [
+                        'attempt_id' => $attemptId,
+                        'user_id' => Auth::id()
+                    ]
+                ], 404);
             }
 
+            // buscar respostas do usuário
+            $userAnswers = UserAnswer::where('quiz_attempt_id', $attemptId)
+                ->with(['question', 'option'])
+                ->get();
+
+            $formattedResults = $userAnswers->map(function ($answer) {
+                // buscar opção correta para esta questão
+                $correctOption = Option::where('question_id', $answer->question_id)
+                    ->where('is_correct', true)
+                    ->first();
+
+                return [
+                    'question_text' => $answer->question->question_text ?? 'Pergunta não encontrada',
+                    'user_answer' => $answer->option->option_text ?? 'Resposta não encontrada',
+                    'correct_answer' => $correctOption->option_text ?? 'Resposta correta não encontrada',
+                    'is_correct' => (bool) $answer->is_correct
+                ];
+            });
+
             return response()->json([
-                'attempt' => $quizAttempt,
-                'results' => [
-                    'final_score' => $quizAttempt->score,
-                    'correct_answers' => $quizAttempt->correct_answers,
-                    'wrong_answers' => $quizAttempt->wrong_answers,
-                    'time_spent' => $quizAttempt->time_spent,
-                    'accuracy' => round(($quizAttempt->correct_answers / 10) * 100, 2),
-                    'completed_at' => $quizAttempt->completed_at
-                ]
+                'success' => true,
+                'attempt_id' => (int) $quizAttempt->id,
+                'final_score' => (int) $quizAttempt->score,
+                'score' => (int) $quizAttempt->score,
+                'correct_answers' => (int) $quizAttempt->correct_answers,
+                'wrong_answers' => (int) $quizAttempt->wrong_answers,
+                'total_questions' => $userAnswers->count() > 0 ? $userAnswers->count() : 10,
+                'time_spent' => (int) $quizAttempt->time_spent,
+                'completed_at' => $quizAttempt->completed_at,
+                'results' => $formattedResults,
+                'answers' => $formattedResults 
             ]);
         } catch (\Exception $e) {
             return response()->json([
-                'message' => 'Tentativa não encontrada.',
-                'error' => $e->getMessage()
-            ], 404);
+                'success' => false,
+                'message' => 'Erro ao carregar resultados.',
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ], 500);
         }
     }
 
@@ -181,13 +212,26 @@ class QuizAttemptController extends Controller
                 ->whereNotNull('completed_at')
                 ->orderBy('created_at', 'desc')
                 ->get()
-                ->makeHidden(['user_id', 'quiz_id']);
+                ->map(function ($attempt) {
+                    return [
+                        'id' => $attempt->id,
+                        'score' => $attempt->score,
+                        'correct_answers' => $attempt->correct_answers,
+                        'wrong_answers' => $attempt->wrong_answers,
+                        'time_spent' => $attempt->time_spent,
+                        'completed_at' => $attempt->completed_at,
+                        'created_at' => $attempt->created_at,
+                        'quiz_title' => $attempt->quiz->title ?? 'Quiz'
+                    ];
+                });
 
             return response()->json([
+                'success' => true,
                 'attempts' => $attempts
             ]);
         } catch (\Exception $e) {
             return response()->json([
+                'success' => false,
                 'message' => 'Erro ao carregar tentativas.',
                 'error' => $e->getMessage()
             ], 500);

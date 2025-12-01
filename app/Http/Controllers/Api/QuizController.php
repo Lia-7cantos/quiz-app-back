@@ -7,6 +7,7 @@ use App\Http\Requests\StartQuizRequest;
 use App\Models\Quiz;
 use App\Models\Question;
 use App\Models\QuizAttempt;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 
@@ -31,7 +32,7 @@ class QuizController extends Controller
                 return response()->json([
                     'message' => 'Você já tem uma tentativa em andamento.',
                     'attempt_id' => $activeAttempt->id
-                ], 409); // tentativa já existe
+                ], 409);
             }
 
             // nova tentativa
@@ -61,7 +62,6 @@ class QuizController extends Controller
         }
     }
 
-
     /**
      * buscar ranking de usuários
      */
@@ -79,9 +79,20 @@ class QuizController extends Controller
                 ->orderBy('best_score', 'DESC')
                 ->orderBy('avg_score', 'DESC')
                 ->limit(10)
-                ->get();
+                ->get()
+                ->map(function ($item) {
+                    return [
+                        'user_id' => $item->user_id,
+                        'name' => $item->user->name ?? 'Jogador ' . $item->user_id,
+                        'best_score' => $item->best_score,
+                        'avg_score' => round($item->avg_score, 2),
+                        'total_attempts' => $item->total_attempts,
+                        'total_time' => $item->total_time
+                    ];
+                });
 
             return response()->json([
+                'success' => true,
                 'ranking' => $ranking
             ]);
         } catch (\Exception $e) {
@@ -105,14 +116,15 @@ class QuizController extends Controller
                 ->inRandomOrder()
                 ->limit(10)
                 ->get()
-                ->makeHidden(['created_at', 'updated_at']); 
+                ->makeHidden(['created_at', 'updated_at']);
 
-            // embaralhar opções de cada questão para não mostrar ordem correta
+            // embaralhar opções de cada questão
             $questions->each(function ($question) {
                 $question->options = $question->options->shuffle();
             });
 
             return response()->json([
+                'success' => true,
                 'questions' => $questions
             ]);
         } catch (\Exception $e) {
