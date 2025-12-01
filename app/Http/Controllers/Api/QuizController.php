@@ -29,10 +29,8 @@ class QuizController extends Controller
                 ->first();
 
             if ($activeAttempt) {
-                return response()->json([
-                    'message' => 'Você já tem uma tentativa em andamento.',
-                    'attempt_id' => $activeAttempt->id
-                ], 409);
+                // se já existe uma tentativa, vamos resetá-la para começar uma nova
+                $activeAttempt->delete();
             }
 
             // nova tentativa
